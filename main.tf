@@ -1,8 +1,60 @@
+########################################### OJO ##############################################
+# AWS NAT Gateway no está incluído en el Free Tier. Levántalo bajo tu propia responsabilidad #
+##############################################################################################
+
+
+# Declaramos las variables
+
+variable "region" {
+  description = "Región donde ubicaremos la infraerstructura."
+  type        = string
+  default     = "eu-west-1"
+}
+
+variable "instance_type" {
+  description = "Tipo de instancia EC2 con la que vamos a trabajar."
+  type    = string
+  default = "t2.micro"
+}
+
+variable "ami" {
+  description = "Ami para las instancias de EC2"
+  type        = string
+  default     = "ami-0701e7be9b2a77600"
+}
+
+variable "zona_publica" {                                          # Por el momento solo necesitamos una zona pública, si después se necesitan más tendremos que cambiar a otro tipo de estructura.
+  description = "Zona de la región que utilizaremos como pública." # Debo evaluar si la zona publica se almacenará en una variable a parte o bien se indicará que es pública mediante atributo
+  type        = string                                             # en una posible estructura de tipo map.
+  default     = "eu-west-1a"                                       #
+}                                                                  #
+
+variable "zona_privada_a" {                                         # Estas redes privadas son claramente iterables en la lógica que las usa, por lo que se almacenarán en otro tipo de estructura
+  description = "Zona de la región a que utilizaremos como privada."# en el futuro. Seguramente un objeto tipo map que nos permita asociar cada nombre de red con su direccionamiento y/o propiedades.
+  type        = string                                              #
+  default     = "eu-west-1a"                                        #
+}                                                                   #
+                                                                    #
+variable "zona_privada_b" {                                         #
+  description = "Zona de la región b que utilizaremos como privada."#
+  type        = string                                              #
+  default     = "eu-west-1b"                                        #
+}                                                                   #
+                                                                    #
+variable "zona_privada_c" {                                         #
+  description = "Zona de la región c que utilizaremos como privada."#
+  type        = string                                              #
+  default     = "eu-west-1c"                                        #
+}                                                                   #
+# En el futuro se declararán como variables de tipo map los servicios personalizados a permitir en la ACL y los Security Groups, así como el origen y la acción a realizar.
+# También se construirán objetos que describirán las redes y sus atributos, siendo la red del VPC la clave principal y las subredes claves de segundo nivel.
+####################################
+
 # Configuramos el provider
 
 provider "aws" {
   version = "~> 2.0"
-  region = "eu-west-1"
+  region = var.region
 }
 ####################################
 
@@ -29,44 +81,47 @@ resource "aws_internet_gateway" "my_first_vpc_gateway" {
 ####################################
 
 # Creamos la subredes del VPC, una por cada zona de disponibilidad más la pública
+# La declaración de las redes también puede hacerse de forma iterativa desde una estructura de tipo map, la clave indicará el nombre y los atributos indicarán el bloque CIDR y la zona de disponibilidad.
+# Por el momento no se plantea un desarrollo multi VPC 
+
 resource "aws_subnet" "my_first_vpc_net" {
   vpc_id     = aws_vpc.my_first_vpc.id
   cidr_block = "10.0.1.0/24"
-  availability_zone = "eu-west-1a"
+  availability_zone = var.zona_privada_a
 
   tags = {
-    Name = "Private Net A"
+    Name = "Private Net ${var.zona_privada_a}"
   }
 }
 
 resource "aws_subnet" "my_second_vpc_net" {
   vpc_id     = aws_vpc.my_first_vpc.id
   cidr_block = "10.0.2.0/24"
-  availability_zone = "eu-west-1b"
+  availability_zone = var.zona_privada_b
 
   tags = {
-    Name = "Private Net B"
+    Name = "Private Net ${var.zona_privada_b}"
   }
 }
 
 resource "aws_subnet" "my_third_vpc_net" {
   vpc_id     = aws_vpc.my_first_vpc.id
   cidr_block = "10.0.3.0/24"
-  availability_zone = "eu-west-1c"
+  availability_zone = var.zona_privada_c
 
   tags = {
-    Name = "Private Net C"
+    Name = "Private Net ${var.zona_privada_c}"
   }
 }
 
 resource "aws_subnet" "my_vpc_public_net" {
   vpc_id     = aws_vpc.my_first_vpc.id
   cidr_block = "10.0.0.0/24"
-  availability_zone = "eu-west-1a"
+  availability_zone = var.zona_publica
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "Public zone of ${aws_vpc.my_first_vpc.tags.Name}"
+    Name = "Public zone of ${aws_vpc.my_first_vpc.tags.Name}, located in zone ${var.zona_publica}"
   }
 }
 ####################################
@@ -74,6 +129,8 @@ resource "aws_subnet" "my_vpc_public_net" {
 # Creamos las ACL. Actua a nivel de seguridad de firewall.
 # OJO, que las ACL son stateless, así que hay que abrir los puertos no privilegiados o se pierde la comunicación. 
 # Este comportamiento puede suponer una complejidad bastante alta, hay que evaluar el uso de ACLS o solo security groups.
+# Los servicios personalizados que permitimos, como SSH o Web, son claramente iterables por una estructura correcta. Se añadirá en el futuro.
+# Los subnet's ids y sus dependendcias también pueden ser establecidas de forma iterativa. No es necesario indicar las dependencias puesto que al ser referencias, terraform lo trata y resuelve de forma interna.
 
 resource "aws_network_acl" "allow_web_and_ssh" {
   vpc_id = aws_vpc.my_first_vpc.id
@@ -152,7 +209,9 @@ resource "aws_network_acl" "allow_web_and_ssh" {
 }
 ####################################
 
-#Creamos los grupos de seguridad para las máquinas que vamos a levantar. Actua a nivel de instancia.
+# Creamos los grupos de seguridad para las máquinas que vamos a levantar. Actua a nivel de instancia.
+# Del mismo modo que las ACL, los Security Groups serán construidos a partir de estructuras de control sobre objetos de tipo map.
+
 resource "aws_security_group" "allow_web_and_ssh" {
   name        = "allow_web_and_ssh"
   description = "Allow Web and SSH incoming and outgoing traffic."
@@ -213,6 +272,7 @@ resource "aws_eip" "my_first_vpc_eip" {
 ####################################
 
 # Creamos el NAT Gateway asociado a la Elastic IP
+# La asignación y dependencias del NAT Gateway a las subredes puede realizarse de forma iterativa. Se implementará en el futuro.
 
 resource "aws_nat_gateway" "my_first_vpc_nat_gateway" {
   allocation_id = aws_eip.my_first_vpc_eip.id # Con este recurso se asocia el NAT GW  la EIP.
@@ -257,6 +317,7 @@ resource "aws_route_table" "private_routing_table" {
 ####################################
 
 # Asociamos las tablas de rutas creadas a las subredes correspondientes
+# La asociación de subredes a las tablas de rutas hay que estudiar si se puede hacer de forma iterativa. Se controlará con una propiedad del objeto que se almacene en una estructura de tipo map.
 
 resource "aws_route_table_association" "public_association" {
   subnet_id      = aws_subnet.my_vpc_public_net.id
@@ -280,6 +341,7 @@ resource "aws_route_table_association" "private_zone_c_association" {
 ####################################
 
 # Subimos la clave pública que tendrá acceso a las máquinas
+# La subida de claves SSH se puede hacer de forma iterativa accediendo a un objeto tipo map.
 
 resource "aws_key_pair" "ssh-vm-igarrido" {
   key_name   = "ssh-vm-igarrido"
@@ -288,15 +350,16 @@ resource "aws_key_pair" "ssh-vm-igarrido" {
 ####################################
 
 # Por fin creamos las instancias de prueba. La que esté ubicada en la subred pública (y por tanto zona "a") tendrá comunicación directa con internet través del IGW del VPC. El resto de subredes o zonas tendrán salida hacia internet a través del NAT GW y no serán alcanzables directamente desde internet.
+# La declaración de las instancias también se podría hacer de forma iterativa, aunque el objeto que las describirá tiene que tener demasiados atributos, quizás no sea del todo conveniente.
 
 resource "aws_instance" "bastion" {
-  ami                          = "ami-0701e7be9b2a77600" # Ubuntu Server 18.04 en eu-west1, elegible en el free tier.
-  instance_type                = "t2.micro"
-  availability_zone            = "eu-west-1a" # Zona que contiene una red publica
-  vpc_security_group_ids       = [aws_security_group.allow_web_and_ssh.id] # Asociamos la máquina al SG correspondiente
+  ami                          = var.ami
+  instance_type                = var.instance_type
+  availability_zone            = var.zona_publica # Zona que contiene una red publica
+  vpc_security_group_ids       = [aws_security_group.allow_web_and_ssh.id]
   subnet_id                    = aws_subnet.my_vpc_public_net.id # Asociamos la máquina a la red pública, su salida entonces será a través del IGW
-  associate_public_ip_address  = true # La subnet ya asigna IP's públicas por defecto, así que no debería ser necesario habilitar esto.
-  key_name                     = aws_key_pair.ssh-vm-igarrido.key_name # Asociamos la clave SSH que hemos subido antes como habilitada en el usuario de la AMI.
+  #associate_public_ip_address  = true # La subnet ya asigna IP's públicas por defecto, así que no debería ser necesario habilitar esto.
+  key_name                     = aws_key_pair.ssh-vm-igarrido.key_name
 
   tags = {
     Name = "Bastion"
@@ -304,16 +367,28 @@ resource "aws_instance" "bastion" {
 }
 
 resource "aws_instance" "application1" {
-  ami                          = "ami-0701e7be9b2a77600" # Ubuntu Server 18.04 en eu-west1, elegible en el free tier.
-  instance_type                = "t2.micro"
-  availability_zone            = "eu-west-1c" # Zona que contiene una red privada
-  vpc_security_group_ids       = [aws_security_group.allow_web_and_ssh.id] # Asociamos la máquina al SG correspondiente
+  ami                          = var.ami
+  instance_type                = var.instance_type
+  availability_zone            = var.zona_privada_c # Zona que contiene una red privada
+  vpc_security_group_ids       = [aws_security_group.allow_web_and_ssh.id]
   subnet_id                    = aws_subnet.my_third_vpc_net.id # Asociamos la máquina a la red privada de la zona c, su salida entonces será a través del NAT GW
-  associate_public_ip_address  = false # La subnet no asigna IP's públicas por defecto, así que no debería ser necesario habilitar esto.
-  key_name                     = aws_key_pair.ssh-vm-igarrido.key_name # Asociamos la clave SSH que hemos subido antes como habilitada en el usuario de la AMI.
+  #associate_public_ip_address  = false # La subnet no asigna IP's públicas por defecto, así que no debería ser necesario habilitar esto.
+  key_name                     = aws_key_pair.ssh-vm-igarrido.key_name
 
   tags = {
     Name = "app1"
   }
 }
+####################################
 
+# Declaramos los outputs
+
+output "bastion_ssh_connection" {
+  description = "Indica cómo conectarse a la máquina bastion del entorno"
+  value = "ssh -A ubuntu@${aws_instance.bastion.public_dns}"
+}
+
+output "app1_ssh_connection" {
+  description = "Indica cómo conectarse a la máquina interna app 1"
+  value = "ssh -A ubuntu@${aws_instance.bastion.private_dns}"
+}
